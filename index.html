@@ -218,85 +218,123 @@
     </div>
     <div class="section-title">Result</div>
     <div id="result"></div>
+    <div id="notify" style="display:none;position:fixed;top:32px;right:32px;z-index:9999;padding:1rem 2rem;border-radius:12px;background:linear-gradient(90deg,#00fff7 0%,#007cf0 100%);color:#1a1a2e;font-family:'Orbitron',sans-serif;font-weight:700;box-shadow:0 2px 12px #00fff744;transition:opacity 0.3s;"></div>
   </div>
 
   <script>
-    const textEl = document.getElementById("text");
-    const passEl = document.getElementById("password");
-    const resultEl = document.getElementById("result");
+  const textEl = document.getElementById("text");
+  const passEl = document.getElementById("password");
+  const resultEl = document.getElementById("result");
 
-    async function getKey(password, salt) {
-      const encoder = new TextEncoder();
-      const keyMaterial = await crypto.subtle.importKey(
-        "raw", encoder.encode(password), { name: "PBKDF2" }, false, ["deriveKey"]
-      );
-      return crypto.subtle.deriveKey(
-        {
-          name: "PBKDF2",
-          salt: salt,
-          iterations: 250000,
-          hash: "SHA-256"
-        },
-        keyMaterial,
-        { name: "AES-GCM", length: 256 },
-        false,
-        ["encrypt", "decrypt"]
-      );
-    }
+  // Local storage keys (obfuscated)
+  const _tK = "_xT";
+  const _pK = "_xP";
 
-    async function encrypt(text, password) {
-      const encoder = new TextEncoder();
-      const salt = crypto.getRandomValues(new Uint8Array(16));
-      const iv = crypto.getRandomValues(new Uint8Array(12));
+  // Restore previous session
+  window.addEventListener("DOMContentLoaded", () => {
+    if (localStorage.getItem(_tK)) textEl.value = localStorage.getItem(_tK);
+    if (localStorage.getItem(_pK)) passEl.value = localStorage.getItem(_pK);
+  });
+
+  // Save text/password on change
+  textEl.addEventListener("input", () => {
+    localStorage.setItem(_tK, textEl.value);
+  });
+  passEl.addEventListener("input", () => {
+    localStorage.setItem(_pK, passEl.value);
+  });
+
+  async function getKey(password, salt) {
+    const encoder = new TextEncoder();
+    const keyMaterial = await crypto.subtle.importKey(
+      "raw", encoder.encode(password), { name: "PBKDF2" }, false, ["deriveKey"]
+    );
+    return crypto.subtle.deriveKey(
+      {
+        name: "PBKDF2",
+        salt: salt,
+        iterations: 250000,
+        hash: "SHA-256"
+      },
+      keyMaterial,
+      { name: "AES-GCM", length: 256 },
+      false,
+      ["encrypt", "decrypt"]
+    );
+  }
+
+  async function encrypt(text, password) {
+    const encoder = new TextEncoder();
+    const salt = crypto.getRandomValues(new Uint8Array(16));
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const key = await getKey(password, salt);
+    const ciphertext = await crypto.subtle.encrypt({ name: "AES-GCM", iv: iv }, key, encoder.encode(text));
+    const combined = new Uint8Array(salt.byteLength + iv.byteLength + ciphertext.byteLength);
+    combined.set(salt);
+    combined.set(iv, salt.byteLength);
+    combined.set(new Uint8Array(ciphertext), salt.byteLength + iv.byteLength);
+    return btoa(String.fromCharCode(...combined));
+  }
+
+  async function decrypt(encoded, password) {
+    try {
+      const data = Uint8Array.from(atob(encoded), c => c.charCodeAt(0));
+      const salt = data.slice(0, 16);
+      const iv = data.slice(16, 28);
+      const ciphertext = data.slice(28);
       const key = await getKey(password, salt);
-      const ciphertext = await crypto.subtle.encrypt({ name: "AES-GCM", iv: iv }, key, encoder.encode(text));
-      const combined = new Uint8Array(salt.byteLength + iv.byteLength + ciphertext.byteLength);
-      combined.set(salt);
-      combined.set(iv, salt.byteLength);
-      combined.set(new Uint8Array(ciphertext), salt.byteLength + iv.byteLength);
-      return btoa(String.fromCharCode(...combined));
+      const decrypted = await crypto.subtle.decrypt({ name: "AES-GCM", iv: iv }, key, ciphertext);
+      return new TextDecoder().decode(decrypted);
+    } catch (e) {
+      return "❌ Decryption failed. Incorrect password or corrupted data.";
+    }
+  }
+
+  document.getElementById("go").onclick = async () => {
+    const password = passEl.value;
+    const text = textEl.value;
+    const option = document.querySelector('input[name="option"]:checked');
+
+    if (!password || !option) {
+      resultEl.innerText = "⚠️ Please provide both password and action.";
+      return;
     }
 
-    async function decrypt(encoded, password) {
-      try {
-        const data = Uint8Array.from(atob(encoded), c => c.charCodeAt(0));
-        const salt = data.slice(0, 16);
-        const iv = data.slice(16, 28);
-        const ciphertext = data.slice(28);
-        const key = await getKey(password, salt);
-        const decrypted = await crypto.subtle.decrypt({ name: "AES-GCM", iv: iv }, key, ciphertext);
-        return new TextDecoder().decode(decrypted);
-      } catch (e) {
-        return "❌ Decryption failed. Incorrect password or corrupted data.";
-      }
+    // Save latest values before processing
+    localStorage.setItem(_tK, text);
+    localStorage.setItem(_pK, password);
+
+    if (option.id === "optionEncrypt") {
+      const encrypted = await encrypt(text, password);
+      resultEl.innerText = encrypted;
+    } else {
+      const decrypted = await decrypt(text, password);
+      resultEl.innerText = decrypted;
     }
+  };
 
-    document.getElementById("go").onclick = async () => {
-      const password = passEl.value;
-      const text = textEl.value;
-      const option = document.querySelector('input[name="option"]:checked');
+  function showNotify(msg, success = true) {
+    const notify = document.getElementById("notify");
+    notify.innerText = msg;
+    notify.style.background = success
+      ? "linear-gradient(90deg,#00fff7 0%,#007cf0 100%)"
+      : "linear-gradient(90deg,#ff4e50 0%,#f9d423 100%)";
+    notify.style.color = success ? "#1a1a2e" : "#fff";
+    notify.style.display = "block";
+    notify.style.opacity = "1";
+    setTimeout(() => {
+      notify.style.opacity = "0";
+      setTimeout(() => { notify.style.display = "none"; }, 400);
+    }, 1800);
+  }
 
-      if (!password || !option) {
-        resultEl.innerText = "⚠️ Please provide both password and action.";
-        return;
-      }
-
-      if (option.id === "optionEncrypt") {
-        const encrypted = await encrypt(text, password);
-        resultEl.innerText = encrypted;
-      } else {
-        const decrypted = await decrypt(text, password);
-        resultEl.innerText = decrypted;
-      }
-    };
-
-    function copy() {
-      navigator.clipboard.writeText(resultEl.innerText).then(() => {
-        alert("Copied!");
-      }, () => {
-        alert("Failed to copy.");
-      });
-    }
+  function copy() {
+    navigator.clipboard.writeText(resultEl.innerText).then(() => {
+      showNotify("Copied to clipboard!");
+    }, () => {
+      showNotify("Failed to copy.", false);
+    });
+  }
   </script>
 </body>
 <!-- End of file
