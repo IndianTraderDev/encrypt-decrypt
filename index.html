@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Secure Encrypt/Decrypt</title>
+  <link rel="manifest" href="manifest.json">
+  <meta name="theme-color" content="#0d6efd">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css">
+  <script>
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('sw.js').then(function(registration) {
+        console.log('ServiceWorker registration successful:', registration.scope);
+      }, function(error) {
+        console.error('ServiceWorker registration failed:', error);
+      });
+    }
+  </script>
+</head>
+<body>
+  <div class="container p-3">
+    <h2>Secure Encrypt/Decrypt</h2>
+    <div>
+      <label>Password</label>
+      <input class="form-control" id="password" type="password">
+    </div>
+    <div class="mt-2">
+      <label>Text</label>
+      <textarea class="form-control" id="text" rows="10"></textarea>
+    </div>
+    <div class="form-check mt-2">
+      <input class="form-check-input" type="radio" name="option" id="optionEncrypt">
+      <label class="form-check-label" for="optionEncrypt">Encrypt</label>
+    </div>
+    <div class="form-check">
+      <input class="form-check-input" type="radio" name="option" id="optionDecrypt">
+      <label class="form-check-label" for="optionDecrypt">Decrypt</label>
+    </div>
+    <div class="mt-2">
+      <button id="go" class="btn btn-primary">Process</button>
+      <button onclick="copy()" class="btn btn-success ml-2">Copy to Clipboard</button>
+    </div>
+    <h5 class="mt-3">Result</h5>
+    <div id="result" style='white-space:pre; word-break:break-word'></div>
+  </div>
+
+  <script>
+    const textEl = document.getElementById("text");
+    const passEl = document.getElementById("password");
+    const resultEl = document.getElementById("result");
+
+    async function getKey(password, salt) {
+      const encoder = new TextEncoder();
+      const keyMaterial = await crypto.subtle.importKey(
+        "raw", encoder.encode(password), { name: "PBKDF2" }, false, ["deriveKey"]
+      );
+      return crypto.subtle.deriveKey(
+        {
+          name: "PBKDF2",
+          salt: salt,
+          iterations: 250000,
+          hash: "SHA-256"
+        },
+        keyMaterial,
+        { name: "AES-GCM", length: 256 },
+        false,
+        ["encrypt", "decrypt"]
+      );
+    }
+
+    async function encrypt(text, password) {
+      const encoder = new TextEncoder();
+      const salt = crypto.getRandomValues(new Uint8Array(16));
+      const iv = crypto.getRandomValues(new Uint8Array(12));
+      const key = await getKey(password, salt);
+      const ciphertext = await crypto.subtle.encrypt({ name: "AES-GCM", iv: iv }, key, encoder.encode(text));
+      const combined = new Uint8Array(salt.byteLength + iv.byteLength + ciphertext.byteLength);
+      combined.set(salt);
+      combined.set(iv, salt.byteLength);
+      combined.set(new Uint8Array(ciphertext), salt.byteLength + iv.byteLength);
+      return btoa(String.fromCharCode(...combined));
+    }
+
+    async function decrypt(encoded, password) {
+      try {
+        const data = Uint8Array.from(atob(encoded), c => c.charCodeAt(0));
+        const salt = data.slice(0, 16);
+        const iv = data.slice(16, 28);
+        const ciphertext = data.slice(28);
+        const key = await getKey(password, salt);
+        const decrypted = await crypto.subtle.decrypt({ name: "AES-GCM", iv: iv }, key, ciphertext);
+        return new TextDecoder().decode(decrypted);
+      } catch (e) {
+        return "❌ Decryption failed. Incorrect password or corrupted data.";
+      }
+    }
+
+    document.getElementById("go").onclick = async () => {
+      const password = passEl.value;
+      const text = textEl.value;
+      const option = document.querySelector('input[name="option"]:checked');
+
+      if (!password || !option) {
+        resultEl.innerText = "⚠️ Please provide both password and action.";
+        return;
+      }
+
+      if (option.id === "optionEncrypt") {
+        const encrypted = await encrypt(text, password);
+        resultEl.innerText = encrypted;
+      } else {
+        const decrypted = await decrypt(text, password);
+        resultEl.innerText = decrypted;
+      }
+    };
+
+    function copy() {
+      navigator.clipboard.writeText(resultEl.innerText).then(() => {
+        alert("Copied!");
+      }, () => {
+        alert("Failed to copy.");
+      });
+    }
+  </script>
+</body>
+</html>
